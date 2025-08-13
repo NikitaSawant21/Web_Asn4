@@ -1,0 +1,10 @@
+<section>
+  {{#if movie}}
+    <h2>{{movie.movie_title}}</h2>
+    <p><strong>_id:</strong> {{movie._id}}</p>
+    <p><strong>movie_id:</strong> {{movie.movie_id}}</p>
+    <p><strong>Released:</strong> {{movie.Released}}</p>
+  {{else}}
+    <p>No movie found.</p>
+  {{/if}}
+</section>

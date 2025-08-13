@@ -1,0 +1,20 @@
+<section>
+  <h2>Find a movie</h2>
+  <form action="/ui/movie/show" method="get">
+    <input type="text" name="id" placeholder="_id (24-hex)">
+    <input type="number" name="movie_id" placeholder="movie_id">
+    <button type="submit">Show</button>
+  </form>
+</section>
+
+<section>
+  <h2>All Movies (first 50)</h2>
+  <ul>
+    {{#each movies}}
+      <li>
+        <strong>{{this.movie_title}}</strong>
+        — id: {{this._id}} — movie_id: {{this.movie_id}} — Released: {{this.Released}}
+      </li>
+    {{/each}}
+  </ul>
+</section>
