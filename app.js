@@ -20,7 +20,12 @@ app.use(bodyParser.json());
 app.use(bodyParser.json({ type: 'application/vnd.api+json' }));
 
 // ---------- View Engine (Handlebars) ----------
-app.engine('hbs', exphbs.engine({ extname: '.hbs' }));
+app.engine('hbs', exphbs.engine({
+  extname: '.hbs',
+  helpers: {
+    json: (context) => JSON.stringify(context, null, 2) // pretty-print JSON in templates
+  }
+}));
 app.set('view engine', 'hbs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -28,6 +33,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ---------- DB Connections ----------
 const EMP_URI = process.env.MONGODB_URI_EMPLOYEES || 'mongodb://localhost:27017/yourDB';
 const MOV_URI = process.env.MONGODB_URI_MOVIES; // Atlas (required for Movie APIs)
+const MOVIES_COLLECTION = process.env.MOVIES_COLLECTION || 'movies'; // match your Atlas collection exactly
 
 // Keep databases separate
 const employeesConn = mongoose.createConnection(EMP_URI);
@@ -59,13 +65,14 @@ let Movie = null;
 if (moviesConn) {
   const MovieSchema = new Schema(
     {
-      movie_id: { type: Number, index: true },
-      movie_title: { type: String, index: true, required: true },
-      Released: { type: String } // adjust to Date/Number if your dataset differs
+      movie_id: { type: Schema.Types.Mixed, index: true }, // allow number or string
+      movie_title: { type: String, index: true },
+      Released: { type: String }
     },
-    { timestamps: true }
+    { timestamps: true, strict: false }  // keep extra fields like title/year/etc.
   );
-  Movie = moviesConn.model('Movie', MovieSchema);
+  // Bind to the exact collection name in Atlas
+  Movie = moviesConn.model('Movie', MovieSchema, MOVIES_COLLECTION);
 }
 
 // ---------- Helpers ----------
@@ -83,6 +90,11 @@ function ensureMovieConn(req, res) {
   }
   return false;
 }
+
+// Utility: build filter that matches movie_id as number OR string
+const movieIdFilter = (movie_id) => ({
+  $or: [{ movie_id: Number(movie_id) }, { movie_id: movie_id }]
+});
 
 // ---------- Employee REST Routes (Local Mongo) ----------
 // GET all employees
@@ -154,22 +166,23 @@ app.get('/api/movies/find', asyncHandler(async (req, res) => {
     return res.json(doc);
   }
   if (movie_id) {
-    const doc = await Movie.findOne({ movie_id: Number(movie_id) });
+    const doc = await Movie.findOne(movieIdFilter(movie_id));
     if (!doc) { const err = new Error('Not found'); err.status = 404; throw err; }
     return res.json(doc);
   }
   if (title) {
-    const doc = await Movie.findOne({ movie_title: title });
+    // match on either movie_title or title
+    const doc = await Movie.findOne({ $or: [{ movie_title: title }, { title }] });
     if (!doc) { const err = new Error('Not found'); err.status = 404; throw err; }
     return res.json(doc);
   }
   const err = new Error('Provide id or movie_id or title'); err.status = 400; throw err;
 }));
 
-// POST create movie
+// POST create movie (API)
 app.post(
   '/api/movies',
-  [body('movie_title').trim().notEmpty()],
+  [body('movie_title').trim().notEmpty().withMessage('movie_title is required')],
   asyncHandler(async (req, res) => {
     if (ensureMovieConn(req, res)) return;
     const errors = validationResult(req);
@@ -191,7 +204,7 @@ app.put('/api/movies', asyncHandler(async (req, res) => {
   const { id, movie_id, movie_title, Released } = req.body;
   if (!id && !movie_id) { const err = new Error('Provide id or movie_id'); err.status = 400; throw err; }
 
-  const filter = id ? { _id: id } : { movie_id: Number(movie_id) };
+  const filter = id ? { _id: id } : movieIdFilter(movie_id);
   const updated = await Movie.findOneAndUpdate(
     filter,
     { $set: { movie_title, Released } },
@@ -207,51 +220,46 @@ app.delete('/api/movies', asyncHandler(async (req, res) => {
   const { id, movie_id } = req.query;
   if (!id && !movie_id) { const err = new Error('Provide id or movie_id'); err.status = 400; throw err; }
 
-  const filter = id ? { _id: id } : { movie_id: Number(movie_id) };
+  const filter = id ? { _id: id } : movieIdFilter(movie_id);
   const r = await Movie.deleteOne(filter);
   if (r.deletedCount === 0) { const err = new Error('Not found'); err.status = 404; throw err; }
   res.json({ ok: true });
 }));
 
 // ---------- UI Routes (Handlebars) ----------
-// Home: list + quick "show" form
-// app.get('/', asyncHandler(async (req, res) => {
-//   if (ensureMovieConn(req, res)) return;
-//   const movies = await Movie.find({}).limit(50);
-//   res.render('index', { layout: 'main', movies });
-// }));
-
-// HOME: list + quick "show" form
+// HOME: list + quick "show" form (normalizes common field names)
+// HOME
 app.get('/', async (req, res, next) => {
   try {
     if (ensureMovieConn(req, res)) return;
-
-    // grab raw docs
     const raw = await Movie.find({}).limit(50).lean();
 
-    // normalize fields so the view always gets movie_title, movie_id, Released
+    const pick = (obj, names, fb = '') =>
+      names.find(n => obj[n] != null) ? obj[names.find(n => obj[n] != null)] : fb;
+
     const movies = raw.map(d => ({
       _id: d._id?.toString(),
-      movie_title: d.movie_title ?? d.title ?? d.name ?? d.MovieTitle ?? '',
-      movie_id: d.movie_id ?? d.movieId ?? d.movieid ?? d.MovieID ?? '',
-      Released: d.Released ?? d.released ?? d.release_year ?? d.releaseYear ?? d.year ?? ''
+      movie_title: pick(d, ['movie_title','title','Title','name','Name','MovieTitle'], '(no title)'),
+      movie_id:    pick(d, ['movie_id','movieId','movieid','MovieID','id','Id','ID'], ''),
+      Released:    pick(d, ['Released','released','release_year','releaseYear','year','Year','ReleaseDate','release_date'], '')
     }));
 
-    res.render('index', { layout: 'main', movies });
+    const showDebug = req.query.debug === '1';
+    res.render('index', { layout: 'main', movies, showDebug, sample: showDebug ? raw[0] : null });
   } catch (e) { next(e); }
 });
 
-
-// SHOW one (by _id OR movie_id)
+// SHOW one
 app.get('/ui/movie/show', asyncHandler(async (req, res) => {
   if (ensureMovieConn(req, res)) return;
   const { id, movie_id } = req.query;
   let movie = null;
 
   if (id) movie = await Movie.findById(id);
-  else if (movie_id) movie = await Movie.findOne({ movie_id: Number(movie_id) });
+  else if (movie_id) movie = await Movie.findOne(movieIdFilter(movie_id));
 
-  res.render('movie-view', { layout: 'main', movie });
+  const showDebug = req.query.debug === '1';
+  res.render('movie-view', { layout: 'main', movie, showDebug });
 }));
 
 // INSERT (form)
@@ -274,15 +282,24 @@ app.get('/ui/movie/update', (req, res) => {
   res.render('movie-update', { layout: 'main' });
 });
 
-app.post('/ui/movie/update', asyncHandler(async (req, res) => {
-  if (ensureMovieConn(req, res)) return;
-  const { id, movie_id, movie_title, Released } = req.body;
-  if (!id && !movie_id) { const err = new Error('Provide id or movie_id'); err.status = 400; throw err; }
-  const filter = id ? { _id: id } : { movie_id: Number(movie_id) };
-  const updated = await Movie.findOneAndUpdate(filter, { $set: { movie_title, Released } }, { new: true });
-  if (!updated) { const err = new Error('Not found'); err.status = 404; throw err; }
-  res.redirect(`/ui/movie/show?${id ? `id=${id}` : `movie_id=${movie_id}`}`);
-}));
+app.post('/ui/movie/update', async (req, res, next) => {
+  try {
+    if (ensureMovieConn(req, res)) return;
+    const { id, movie_id, movie_title, Released } = req.body;
+    if (!id && !movie_id) { const err = new Error('Provide id or movie_id'); err.status = 400; throw err; }
+
+    const filter = id ? { _id: id } : movieIdFilter(movie_id);
+    const updated = await Movie.findOneAndUpdate(
+      filter,
+      { $set: { movie_title, Released } },
+      { new: true }
+    );
+    if (!updated) { const err = new Error('Not found'); err.status = 404; throw err; }
+
+    // Render directly to avoid redirect mismatch
+    res.render('movie-view', { layout: 'main', movie: updated.toObject() });
+  } catch (e) { next(e); }
+});
 
 // DELETE (form)
 app.get('/ui/movie/delete', (req, res) => {
@@ -293,7 +310,7 @@ app.post('/ui/movie/delete', asyncHandler(async (req, res) => {
   if (ensureMovieConn(req, res)) return;
   const { id, movie_id } = req.body;
   if (!id && !movie_id) { const err = new Error('Provide id or movie_id'); err.status = 400; throw err; }
-  const filter = id ? { _id: id } : { movie_id: Number(movie_id) };
+  const filter = id ? { _id: id } : movieIdFilter(movie_id);
   const r = await Movie.deleteOne(filter);
   if (r.deletedCount === 0) { const err = new Error('Not found'); err.status = 404; throw err; }
   res.redirect('/');

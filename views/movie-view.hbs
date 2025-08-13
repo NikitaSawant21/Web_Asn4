@@ -1,9 +1,18 @@
 <section>
   {{#if movie}}
-    <h2>{{movie.movie_title}}</h2>
+    <h2>{{movie.movie_title}}{{#unless movie.movie_title}}{{movie.title}}{{/unless}}</h2>
     <p><strong>_id:</strong> {{movie._id}}</p>
     <p><strong>movie_id:</strong> {{movie.movie_id}}</p>
-    <p><strong>Released:</strong> {{movie.Released}}</p>
+    <p><strong>Released:</strong>
+      {{#if movie.Released}}{{movie.Released}}{{else}}
+        {{#if movie.year}}{{movie.year}}{{else}}{{movie.release_year}}{{/if}}
+      {{/if}}
+    </p>
+
+    {{#if showDebug}}
+      <h3>Raw (debug)</h3>
+      <pre>{{json movie}}</pre>
+    {{/if}}
   {{else}}
     <p>No movie found.</p>
   {{/if}}

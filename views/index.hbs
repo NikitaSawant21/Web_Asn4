@@ -9,12 +9,26 @@
 
 <section>
   <h2>All Movies (first 50)</h2>
-  <ul>
-    {{#each movies}}
-      <li>
-        <strong>{{this.movie_title}}</strong>
-        — id: {{this._id}} — movie_id: {{this.movie_id}} — Released: {{this.Released}}
-      </li>
-    {{/each}}
-  </ul>
+  {{#if movies.length}}
+    <ul>
+      {{#each movies}}
+        <li>
+          <strong>{{movie_title}}</strong>
+          — id: {{_id}} — movie_id: {{movie_id}} — Released: {{Released}}
+        </li>
+      {{/each}}
+    </ul>
+  {{else}}
+    <p>No movies found.</p>
+  {{/if}}
 </section>
+
+{{!-- Debug: shows the first raw document so you can see real keys --}}
+<!-- your list above here -->
+
+{{#if showDebug}}
+<section>
+  <h3>Debug (first raw doc)</h3>
+  <pre>{{json sample}}</pre>
+</section>
+{{/if}}
